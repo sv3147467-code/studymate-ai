@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Bubble Blast - Puzzle Game</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#0a0a1a;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:'Segoe UI',sans-serif;overflow:hidden;}
+#ui{width:340px;display:flex;justify-content:space-between;align-items:center;padding:10px 5px;color:#fff;}
+.ui-box{background:#1a1a2e;border-radius:12px;padding:8px 16px;text-align:center;}
+.ui-label{font-size:11px;color:#aaa;}
+.ui-val{font-size:20px;font-weight:700;color:#ffd200;}
+#level-val{color:#3ecfcf;}
+#stars-val{color:#ffd200;font-size:18px;}
+#canvas-wrap{position:relative;}
+#game-canvas{display:block;border-radius:12px;background:#0f0f2a;}
+#overlay{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;}
+#overlay h2{font-size:28px;margin-bottom:8px;color:#ffd200;}
+#overlay p{font-size:14px;color:#aaa;margin-bottom:20px;}
+#overlay button{padding:12px 36px;border:none;border-radius:25px;background:linear-gradient(135deg,#6c63ff,#3ecfcf);color:#fff;font-size:16px;font-weight:700;cursor:pointer;}
+#bottom{width:340px;display:flex;justify-content:space-between;align-items:center;padding:8px 5px;}
+#next-wrap{background:#1a1a2e;border-radius:12px;padding:8px 16px;display:flex;align-items:center;gap:8px;}
+#next-wrap span{font-size:12px;color:#aaa;}
+#aim-toggle{padding:8px 16px;border:none;border-radius:20px;background:#1a1a2e;color:#3ecfcf;font-size:13px;font-weight:700;cursor:pointer;}
+#msg{color:#ffd200;font-size:13px;font-weight:500;}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div class="ui-box"><div class="ui-label">SCORE</div><div class="ui-val" id="score-val">0</div></div>
+  <div class="ui-box"><div class="ui-label">LEVEL</div><div class="ui-val" id="level-val">1</div></div>
+  <div class="ui-box"><div class="ui-label">BEST</div><div class="ui-val" id="best-val">0</div></div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="game-canvas" width="340" height="500"></canvas>
+  <div id="overlay">
+    <h2>🫧 Bubble Blast</h2>
+    <p>Match 3+ same color bubbles!</p>
+    <button onclick="startGame()">▶ Play Now</button>
+  </div>
+</div>
+
+<div id="bottom">
+  <div id="next-wrap">
+    <span>Next:</span>
+    <canvas id="next-canvas" width="36" height="36"></canvas>
+  </div>
+  <div id="msg">Aim & Shoot!</div>
+  <button id="aim-toggle" onclick="toggleAim()">🎯 Aim: ON</button>
+</div>
+
+<script>
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+const nc = document.getElementById('next-canvas');
+const nctx = nc.getContext('2d');
+
+const W = 340, H = 500;
+const R = 18;
+const COLS = 9;
+const ROWS = 12;
+const COLORS = ['#e63946','#f4a261','#2ec4b6','#6c63ff','#06d6a0','#ffd200','#ff6b9d','#a8dadc'];
+
+let grid=[], current, next, score=0, best=parseInt(localStorage.getItem('bb-best')||'0'), level=1, flying=false, ball={}, showAim=true, gameOn=false, particles=[];
+
+document.getElementById('best-val').textContent=best;
+
+function rnd(){return COLORS[Math.floor(Math.random()*Math.min(COLORS.length, 3+level))];}
+
+function getBX(r,c){return c*(R*2)+R+(r%2===0?R:0);}
+function getBY(r){return r*(R*1.75)+R+5;}
+
+function initGrid(){
+  grid=[];
+  let rows = 4+Math.floor(level/2);
+  for(let r=0;r<ROWS;r++){
+    grid[r]=[];
+    for(let c=0;c<COLS;c++){
+      grid[r][c] = r<rows ? {color:rnd()} : null;
+    }
+  }
+}
+
+function drawCrystalBubble(c,x,y,r,context){
+  context=context||ctx;
+  // Main bubble
+  context.beginPath();
+  context.arc(x,y,r-1,0,Math.PI*2);
+  context.fillStyle=c;
+  context.fill();
+  // Inner glow
+  context.beginPath();
+  context.arc(x,y,r-3,0,Math.PI*2);
+  context.fillStyle='rgba(255,255,255,0.15)';
+  context.fill();
+  // Big shine
+  context.beginPath();
+  context.arc(x-r*0.32,y-r*0.32,r*0.38,0,Math.PI*2);
+  context.fillStyle='rgba(255,255,255,0.55)';
+  context.fill();
+  // Small shine
+  context.beginPath();
+  context.arc(x+r*0.2,y-r*0.1,r*0.15,0,Math.PI*2);
+  context.fillStyle='rgba(255,255,255,0.35)';
+  context.fill();
+  // Outline
+  context.beginPath();
+  context.arc(x,y,r-1,0,Math.PI*2);
+  context.strokeStyle='rgba(255,255,255,0.25)';
+  context.lineWidth=1.5;
+  context.stroke();
+}
+
+function drawAimLine(){
+  if(!showAim||flying) return;
+  let sx=W/2, sy=H-50;
+  let angle=shooterAngle;
+  let x=sx, y=sy;
+  let vx=Math.cos(angle)*R*1.2, vy=Math.sin(angle)*R*1.2;
+  ctx.setLineDash([6,6]);
+  ctx.strokeStyle='rgba(255,255,255,0.25)';
+  ctx.lineWidth=1.5;
+  ctx.beginPath();
+  ctx.moveTo(x,y);
+  for(let i=0;i<30;i++){
+    x+=vx; y+=vy;
+    if(x<R){x=R;vx*=-1;}
+    if(x>W-R){x=W-R;vx*=-1;}
+    if(y<0) break;
+  }
+  ctx.lineTo(x,y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+let shooterAngle=-Math.PI/2;
+
+function drawShooter(){
+  if(!current) return;
+  drawCrystalBubble(current,W/2,H-50,R);
+  // Arrow
+  ctx.beginPath();
+  ctx.moveTo(W/2,H-50);
+  ctx.lineTo(W/2+Math.cos(shooterAngle)*55,H-50+Math.sin(shooterAngle)*55);
+  ctx.strokeStyle='rgba(255,255,255,0.5)';
+  ctx.lineWidth=2;
+  ctx.stroke();
+  // Arrow head
+  let ax=W/2+Math.cos(shooterAngle)*55, ay=H-50+Math.sin(shooterAngle)*55;
+  ctx.beginPath();
+  ctx.arc(ax,ay,4,0,Math.PI*2);
+  ctx.fillStyle='#fff';
+  ctx.fill();
+}
+
+function drawGrid(){
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      if(grid[r]&&grid[r][c]){
+        drawCrystalBubble(grid[r][c].color,getBX(r,c),getBY(r),R);
+      }
+    }
+  }
+}
+
+function drawParticles(){
+  particles=particles.filter(p=>p.life>0);
+  for(let p of particles){
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,p.r*p.life/20,0,Math.PI*2);
+    ctx.fillStyle=p.color;
+    ctx.globalAlpha=p.life/20;
+    ctx.fill();
+    ctx.globalAlpha=1;
+    p.x+=p.vx; p.y+=p.vy; p.vy+=0.2; p.life--;
+  }
+}
+
+function addParticles(x,y,color){
+  for(let i=0;i<10;i++){
+    let angle=Math.random()*Math.PI*2;
+    let speed=2+Math.random()*4;
+    particles.push({x,y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed-3,r:R*0.6,color,life:20});
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#0f0f2a';
+  ctx.fillRect(0,0,W,H);
+  // Danger line
+  ctx.beginPath();
+  ctx.moveTo(0,H-90);
+  ctx.lineTo(W,H-90);
+  ctx.strokeStyle='rgba(255,50,50,0.3)';
+  ctx.lineWidth=1;
+  ctx.setLineDash([8,8]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  drawGrid();
+  drawParticles();
+  if(flying) drawCrystalBubble(ball.color,ball.x,ball.y,R);
+  else {drawAimLine(); drawShooter();}
+  nctx.clearRect(0,0,36,36);
+  if(next) drawCrystalBubble(next,18,18,R,nctx);
+}
+
+function getNeighbors(r,c){
+  let odd=r%2===1;
+  return [
+    {r:r-1,c:odd?c:c-1},{r:r-1,c:odd?c+1:c},
+    {r,c:c-1},{r,c:c+1},
+    {r:r+1,c:odd?c:c-1},{r:r+1,c:odd?c+1:c}
+  ];
+}
+
+function findMatches(r,c,color,visited){
+  if(r<0||r>=ROWS||c<0||c>=COLS) return [];
+  let key=r+','+c;
+  if(visited[key]) return [];
+  if(!grid[r]||!grid[r][c]||grid[r][c].color!==color) return [];
+  visited[key]=true;
+  let res=[{r,c}];
+  for(let n of getNeighbors(r,c)) res=res.concat(findMatches(n.r,n.c,color,visited));
+  return res;
+}
+
+function snapBall(){
+  let bestR=-1,bestC=-1,bestD=999;
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      if(grid[r]&&!grid[r][c]){
+        let d=Math.hypot(ball.x-getBX(r,c),ball.y-getBY(r));
+        if(d<bestD){bestD=d;bestR=r;bestC=c;}
+      }
+    }
+  }
+  if(bestR>=0&&bestD<R*2.5){
+    grid[bestR][bestC]={color:ball.color};
+    let matches=findMatches(bestR,bestC,ball.color,{});
+    if(matches.length>=3){
+      for(let m of matches){
+        addParticles(getBX(m.r,m.c),getBY(m.r),ball.color);
+        grid[m.r][m.c]=null;
+      }
+      score+=matches.length*10*level;
+      document.getElementById('score-val').textContent=score;
+      if(score>best){best=score;localStorage.setItem('bb-best',best);document.getElementById('best-val').textContent=best;}
+      checkWin();
+    }
+    checkLose();
+  }
+  flying=false;
+  current=next;
+  next=rnd();
+}
+
+function checkWin(){
+  let any=false;
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) if(grid[r]&&grid[r][c]) any=true;
+  if(!any){
+    level++;
+    document.getElementById('level-val').textContent=level;
+    document.getElementById('msg').textContent='Level '+level+'! 🎉';
+    setTimeout(()=>{initGrid();},1000);
+  }
+}
+
+function checkLose(){
+  for(let c=0;c<COLS;c++){
+    if(grid[ROWS-3]&&grid[ROWS-3][c]){
+      showOverlay('Game Over!','Score: '+score,'Play Again',true);
+      gameOn=false; return;
+    }
+  }
+}
+
+function showOverlay(title,sub,btn,reset){
+  let ov=document.getElementById('overlay');
+  ov.style.display='flex';
+  ov.innerHTML=`<h2>${title}</h2><p>${sub}</p><button onclick="startGame()">▶ ${btn}</button>`;
+}
+
+function update(){
+  if(!flying) return;
+  ball.x+=ball.vx; ball.y+=ball.vy;
+  if(ball.x<R){ball.x=R;ball.vx*=-1;}
+  if(ball.x>W-R){ball.x=W-R;ball.vx*=-1;}
+  if(ball.y<R){snapBall();return;}
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      if(!grid[r]||!grid[r][c]) continue;
+      if(Math.hypot(ball.x-getBX(r,c),ball.y-getBY(r))<R*1.85){snapBall();return;}
+    }
+  }
+  if(ball.y>H) snapBall();
+}
+
+function shoot(angle){
+  if(flying||!gameOn) return;
+  if(angle>-Math.PI+0.15&&angle<-0.15){
+    ball={x:W/2,y:H-50,vx:Math.cos(angle)*9,vy:Math.sin(angle)*9,color:current};
+    flying=true;
+  }
+}
+
+canvas.addEventListener('click',function(e){
+  if(!gameOn) return;
+  let rect=canvas.getBoundingClientRect();
+  let mx=(e.clientX-rect.left)*(W/rect.width);
+  let my=(e.clientY-rect.top)*(H/rect.height);
+  shoot(Math.atan2(my-(H-50),mx-W/2));
+});
+
+canvas.addEventListener('touchstart',function(e){
+  e.preventDefault();
+  if(!gameOn) return;
+  let rect=canvas.getBoundingClientRect();
+  let t=e.touches[0];
+  let mx=(t.clientX-rect.left)*(W/rect.width);
+  let my=(t.clientY-rect.top)*(H/rect.height);
+  shoot(Math.atan2(my-(H-50),mx-W/2));
+},{passive:false});
+
+canvas.addEventListener('mousemove',function(e){
+  if(!gameOn||flying) return;
+  let rect=canvas.getBoundingClientRect();
+  let mx=(e.clientX-rect.left)*(W/rect.width);
+  let my=(e.clientY-rect.top)*(H/rect.height);
+  shooterAngle=Math.atan2(my-(H-50),mx-W/2);
+});
+
+canvas.addEventListener('touchmove',function(e){
+  e.preventDefault();
+  if(!gameOn||flying) return;
+  let rect=canvas.getBoundingClientRect();
+  let t=e.touches[0];
+  let mx=(t.clientX-rect.left)*(W/rect.width);
+  let my=(t.clientY-rect.top)*(H/rect.height);
+  shooterAngle=Math.atan2(my-(H-50),mx-W/2);
+},{passive:false});
+
+function toggleAim(){
+  showAim=!showAim;
+  document.getElementById('aim-toggle').textContent='🎯 Aim: '+(showAim?'ON':'OFF');
+}
+
+function startGame(){
+  score=0; level=1; flying=false; particles=[];
+  document.getElementById('score-val').textContent=0;
+  document.getElementById('level-val').textContent=1;
+  document.getElementById('msg').textContent='Aim & Shoot!';
+  document.getElementById('overlay').style.display='none';
+  initGrid();
+  current=rnd(); next=rnd();
+  gameOn=true;
+  loop();
+}
+
+let raf;
+function loop(){
+  if(!gameOn) return;
+  update(); draw();
+  raf=requestAnimationFrame(loop);
+}
+
+draw();
+</script>
+</body>
+  </html>
